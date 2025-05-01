@@ -4,8 +4,10 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as fse from 'fs-extra';
 import { spawn } from 'child_process';
-import * as moment from 'moment';
+// import * as moment from 'moment';
+import moment from 'moment'
 import * as upath from 'upath';
+import { log } from 'console';
 
 class Logger {
     static channel: vscode.OutputChannel;
@@ -19,12 +21,12 @@ class Logger {
 
     static showInformationMessage(message: string, ...items: string[]): Thenable<string> {
         this.log(message);
-        return vscode.window.showInformationMessage(message, ...items);
+        return vscode.window.showInformationMessage(message, ...items) as Thenable<string>;
     }
 
     static showErrorMessage(message: string, ...items: string[]): Thenable<string> {
         this.log(message);
-        return vscode.window.showErrorMessage(message, ...items);
+        return vscode.window.showErrorMessage(message, ...items) as Thenable<string>;
     }
 }
 
@@ -38,7 +40,7 @@ export function activate(context: vscode.ExtensionContext) {
         try {
             Paster.paste();
         } catch (e) {
-            Logger.showErrorMessage(e)
+            Logger.showErrorMessage(e instanceof Error ? e.message : String(e));
         }
     });
 
@@ -90,7 +92,7 @@ class Paster {
         }
         let filePath = fileUri.fsPath;
         let folderPath = path.dirname(filePath);
-        let projectPath = vscode.workspace.rootPath;
+        let projectPath = vscode.workspace.workspaceFolders?.toString ? vscode.workspace.workspaceFolders?.toString() : "";
 
         // get selection as image file name, need check
         var selection = editor.selection;
@@ -160,47 +162,94 @@ class Paster {
                     instance.saveAndPaste(editor, imagePath);
                 }
             } catch (err) {
-                Logger.showErrorMessage(`fs.existsSync(${imagePath}) fail. message=${err.message}`);
+                if (err instanceof Error) {
+                    Logger.showErrorMessage(`fs.existsSync(${imagePath}) fail. message=${err.message}`);
+                } else {
+                    Logger.showErrorMessage(`fs.existsSync(${imagePath}) fail. Unknown error: ${String(err)}`);
+                }
                 return;
             }
         });
     }
 
-    public static saveAndPaste(editor: vscode.TextEditor, imagePath) {
+    public static saveAndPaste(editor: vscode.TextEditor, imagePath: string) {
         this.createImageDirWithImagePath(imagePath).then(imagePath => {
+            let imgPath = imagePath ? imagePath as string : "";
             // save image and insert to current edit file
-            this.saveClipboardImageToFileAndGetPath(imagePath, (imagePath, imagePathReturnByScript) => {
+            this.saveClipboardImageToFileAndGetPath(imgPath, (imagePath: string, imagePathReturnByScript) => {
                 if (!imagePathReturnByScript) return;
                 if (imagePathReturnByScript === 'no image') {
                     Logger.showInformationMessage('There is not an image in the clipboard.');
                     return;
                 }
 
-                imagePath = this.renderFilePath(editor.document.languageId, this.basePathConfig, imagePath, this.forceUnixStyleSeparatorConfig, this.prefixConfig, this.suffixConfig);
+                if (imagePathReturnByScript === 'ssh-remote') {
+                    const remoteHost = vscode.workspace.getConfiguration('pasteImage')['remoteHost'];
+                    const remoteUser = vscode.workspace.getConfiguration('pasteImage')['remoteUser'];
+                    const remotePath = vscode.workspace.getConfiguration('pasteImage')['remotePath'];
 
-                editor.edit(edit => {
-                    let current = editor.selection;
-
-                    if (current.isEmpty) {
-                        edit.insert(current.start, imagePath);
-                    } else {
-                        edit.replace(current, imagePath);
+                    if (!remoteHost || !remoteUser || !remotePath) {
+                        Logger.showErrorMessage('Remote SSH configuration is missing. Please check your settings.');
+                        return;
                     }
-                });
+
+                    this.scpToRemote(imagePath, remoteHost, remoteUser, remotePath, (err) => {
+                        if (err) {
+                            Logger.showErrorMessage(`Failed to SCP image to remote host: ${err.message}`);
+                            return;
+                        }
+
+                        Logger.showInformationMessage(`Image successfully copied to remote host: ${remoteHost}`);
+                        this.insertImagePath(editor, imagePath, remotePath);
+                    });
+                } else {
+                    this.insertImagePath(editor, imagePath, this.basePathConfig);
+                }
             });
         }).catch(err => {
             if (err instanceof PluginError) {
-                Logger.showErrorMessage(err.message);
+                Logger.showErrorMessage(err.message || '');
             } else {
-                Logger.showErrorMessage(`Failed make folder. message=${err.message}`);
+                Logger.showErrorMessage(`Failed make folder. message=${(err as Error).message}`);
             }
             return;
         });
     }
 
+    private static scpToRemote(localPath: string, remoteHost: string, remoteUser: string, remotePath: string, callback: (err?: Error) => void) {
+        const remoteFullPath = `${remoteUser}@${remoteHost}:${remotePath}`;
+        const scp = spawn('scp', [localPath, remoteFullPath]);
+
+        scp.on('error', (err) => {
+            callback(err);
+        });
+
+        scp.on('close', (code) => {
+            if (code === 0) {
+                callback();
+            } else {
+                callback(new Error(`SCP process exited with code ${code}`));
+            }
+        });
+    }
+
+    private static insertImagePath(editor: vscode.TextEditor, localPath: string, basePath: string) {
+        const imagePath = this.renderFilePath(editor.document.languageId, basePath, localPath, this.forceUnixStyleSeparatorConfig, this.prefixConfig, this.suffixConfig);
+
+        editor.edit(edit => {
+            let current = editor.selection;
+
+            if (current.isEmpty) {
+                edit.insert(current.start, imagePath);
+            } else {
+                edit.replace(current, imagePath);
+            }
+        });
+    }
+
     public static getImagePath(filePath: string, selectText: string, folderPathFromConfig: string, 
         showFilePathConfirmInputBox: boolean, filePathConfirmInputBoxMode: string,
-        callback: (err, imagePath: string) => void) {
+        callback: (err: Error | null, imagePath: string) => void) {
         // image file name
         let imageFileName = "";
         if (!selectText) {
@@ -237,7 +286,7 @@ class Paster {
             return;
         }
 
-        function makeImagePath(fileName) {
+        function makeImagePath(fileName: string) {
             // image output path
             let folderPath = path.dirname(filePath);
             let imagePath = "";
@@ -285,9 +334,10 @@ class Paster {
     /**
      * use applescript to save image from clipboard and get file path
      */
-    private static saveClipboardImageToFileAndGetPath(imagePath, cb: (imagePath: string, imagePathFromScript: string) => void) {
+    private static saveClipboardImageToFileAndGetPath(imagePath: string, cb: (imagePath: string, imagePathFromScript: string) => void) {
+        Logger.showInformationMessage("imagePath", imagePath);
+        Logger.showInformationMessage("vscode.env.appName", vscode.env.appName);
         if (!imagePath) return;
-
         let platform = process.platform;
         if (platform === 'win32') {
             // Windows
@@ -310,10 +360,10 @@ class Paster {
                 imagePath
             ]);
             powershell.on('error', function (e) {
-                if (e.code == "ENOENT") {
+                if ((e as any).code == "ENOENT") {
                     Logger.showErrorMessage(`The powershell command is not in you PATH environment variables. Please add it and retry.`);
                 } else {
-                    Logger.showErrorMessage(e);
+                    Logger.showErrorMessage(e instanceof Error ? e.message : String(e));
                 }
             });
             powershell.on('exit', function (code, signal) {
@@ -329,7 +379,7 @@ class Paster {
 
             let ascript = spawn('osascript', [scriptPath, imagePath]);
             ascript.on('error', function (e) {
-                Logger.showErrorMessage(e);
+                Logger.showErrorMessage(e instanceof Error ? e.message : String(e));
             });
             ascript.on('exit', function (code, signal) {
                 // console.log('exit',code,signal);
@@ -337,14 +387,18 @@ class Paster {
             ascript.stdout.on('data', function (data: Buffer) {
                 cb(imagePath, data.toString().trim());
             });
-        } else {
+        }
+        else if (platform === 'linux' && vscode.env.appName === 'ssh-remote') {
+            cb(imagePath, 'ssh-remote');
+        }
+        else {
             // Linux 
 
             let scriptPath = path.join(__dirname, '../../res/linux.sh');
 
             let ascript = spawn('sh', [scriptPath, imagePath]);
             ascript.on('error', function (e) {
-                Logger.showErrorMessage(e);
+                Logger.showErrorMessage(e instanceof Error ? e.message : String(e));
             });
             ascript.on('exit', function (code, signal) {
                 // console.log('exit',code,signal);
@@ -411,7 +465,7 @@ class Paster {
         return result;
     }
 
-    public static replacePathVariable(pathStr: string, projectRoot: string, curFilePath: string, postFunction: (string) => string = (x) => x): string {
+    public static replacePathVariable(pathStr: string, projectRoot: string, curFilePath: string, postFunction: (arg0: string) => string = (x) => x): string {
         let currentFileDir = path.dirname(curFilePath);
         let ext = path.extname(curFilePath);
         let fileName = path.basename(curFilePath);

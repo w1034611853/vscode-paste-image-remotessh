@@ -1,18 +1,18 @@
 {
-  "name": "vscode-paste-image",
-  "displayName": "Paste Image",
+  "name": "vscode-paste-image-remotessh",
+  "displayName": "Paste Image remote",
   "description": "paste image from clipboard directly",
   "version": "1.0.4",
-  "publisher": "mushan",
+  "publisher": "wangruoyu",
   "author": {
-    "name": "mushan",
-    "email": "mushanmail@126.com"
+    "name": "wangruoyu",
+    "email": "ruoyu_wang98@outlook.com"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/mushanshitiancai/vscode-paste-image.git"
+    "url": "https://github.com/w1034611853/vscode-paste-image-remotessh.git"
   },
-  "homepage": "https://github.com/mushanshitiancai/vscode-paste-image/blob/master/README.md",
+  "homepage": "https://github.com/w1034611853/vscode-paste-image-remotessh/blob/master/README.md",
   "bugs": {
     "url": "https://github.com/mushanshitiancai/vscode-paste-image/issues"
   },
@@ -130,9 +130,8 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "node ./node_modules/vscode/bin/compile",
-    "compile": "node ./node_modules/vscode/bin/compile -watch -p ./",
-    "postinstall": "node ./node_modules/vscode/bin/install"
+    "vscode:prepublish": "npx tsc -p ./",
+    "compile": "npx tsc -watch -p ./"
   },
   "dependencies": {
     "copy-paste": "^1.2.0",
@@ -141,7 +140,9 @@
     "upath": "^1.0.0"
   },
   "devDependencies": {
-    "typescript": "^1.8.5",
-    "vscode": "^0.11.0"
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vscode": "^1.1.37"
   }
 }
